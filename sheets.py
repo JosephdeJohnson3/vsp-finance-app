@@ -83,15 +83,21 @@ def read_dashboard():
 
 @st.cache_data(ttl=30)
 def read_monthly_summary():
+    """Reads every populated month row (currently 2026-07 through 2028-12), so
+    this grows with the sheet without needing code changes. Skips the TOTAL row."""
     ws = _ws("Monthly Summary")
-    rows = ws.get("A5:F10")
+    rows = ws.get("A5:F200")
     out = []
     for r in rows:
-        if not r or not r[0]:
+        if not r or not r[0] or r[0].strip().upper() == "TOTAL":
             continue
         r = r + [""] * (6 - len(r))
         out.append({"month": r[0], "joseph": r[1], "ethan": r[2], "josh": r[3], "vsp": r[4], "total": r[5]})
     return out
+
+
+def spreadsheet_url():
+    return f"https://docs.google.com/spreadsheets/d/{st.secrets['sheet_id']}/edit"
 
 
 @st.cache_data(ttl=30)

@@ -50,10 +50,18 @@ except Exception as e:
     st.stop()
 
 st.sidebar.title("🎻 VSP Finance")
+st.sidebar.markdown(f"[📊 Open the Spreadsheet]({sheets.spreadsheet_url()})")
+st.sidebar.divider()
 page = st.sidebar.radio(
     "Go to",
-    ["Dashboard", "Upcoming Events", "Add Payment", "Event Log", "Accounts Receivable"],
+    ["Dashboard", "History", "Upcoming Events", "Add Payment", "Event Log", "Accounts Receivable"],
 )
+
+def months_to_date(months_data):
+    """Filters out months that haven't happened yet, so a 2+ year runway of
+    pre-built formula rows doesn't clutter the UI with empty future months."""
+    cutoff = dt.date.today().strftime("%Y-%m")
+    return [m for m in months_data if m["month"] <= cutoff]
 
 # ---------------------------------------------------------------- DASHBOARD
 if page == "Dashboard":
@@ -73,8 +81,8 @@ if page == "Dashboard":
     c3.metric("Josh", fmt_money(parse_money(d["this_month_josh"])))
     c4.metric("Total", fmt_money(parse_money(d["this_month_total"])))
 
-    st.subheader("Monthly Payout by Person")
-    months_data = sheets.read_monthly_summary()
+    st.subheader("Monthly Payout by Person (last 6 months)")
+    months_data = months_to_date(sheets.read_monthly_summary())[-6:]
     if months_data:
         month_labels = [m["month"] for m in months_data]
         fig = go.Figure()
@@ -106,44 +114,121 @@ if page == "Dashboard":
     st.table(rows)
     st.caption(f"Grand total once everything is collected: {d['grand_total']['total']}")
 
+# ------------------------------------------------------------------- HISTORY
+elif page == "History":
+    st.title("History")
+    st.caption("Every month to date, plus lifetime totals. Automatically grows as new months pass "
+               "(the spreadsheet has formula rows built out through the end of 2028).")
+
+    months_data = months_to_date(sheets.read_monthly_summary())
+
+    if not months_data:
+        st.info("No historical data yet.")
+    else:
+        lifetime = {"joseph": 0.0, "ethan": 0.0, "josh": 0.0, "vsp": 0.0, "total": 0.0}
+        for m in months_data:
+            for key in lifetime:
+                lifetime[key] += parse_money(m[key])
+
+        st.subheader("Lifetime Totals")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Joseph", fmt_money(lifetime["joseph"]))
+        c2.metric("Ethan", fmt_money(lifetime["ethan"]))
+        c3.metric("Josh", fmt_money(lifetime["josh"]))
+        c4.metric("VSP Contributions", fmt_money(lifetime["vsp"]))
+        c5.metric("Grand Total", fmt_money(lifetime["total"]))
+        st.caption("VSP Contributions = the 10% collected from paid events only, not counting the "
+                   "$1,000 reserve (see Dashboard for the full VSP Fund Balance).")
+
+        st.subheader("Every Month to Date")
+        month_labels = [m["month"] for m in months_data]
+        fig = go.Figure()
+        for person, color in [("joseph", PEOPLE_COLORS["Joseph"]), ("ethan", PEOPLE_COLORS["Ethan"]),
+                               ("josh", PEOPLE_COLORS["Josh"])]:
+            values = [parse_money(m[person]) for m in months_data]
+            fig.add_bar(
+                name=person.capitalize(), x=month_labels, y=values,
+                marker_color=color,
+                text=[fmt_money(v) if v else "" for v in values],
+                textposition="outside",
+            )
+        fig.update_layout(
+            barmode="group", plot_bgcolor=SURFACE, paper_bgcolor=SURFACE,
+            font=dict(color=INK), legend_title_text="",
+            xaxis=dict(showgrid=False, linecolor=MUTED),
+            yaxis=dict(showgrid=True, gridcolor=GRID, tickprefix="$", zeroline=False),
+            margin=dict(t=10, b=10),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("Monthly Breakdown Table")
+        table_rows = [{"Month": m["month"], "Joseph": m["joseph"], "Ethan": m["ethan"],
+                       "Josh": m["josh"], "VSP Contributions": m["vsp"], "Total": m["total"]}
+                      for m in reversed(months_data)]
+        st.table(table_rows)
+
 # ------------------------------------------------------------- UPCOMING EVENTS
 elif page == "Upcoming Events":
-    st.title("Upcoming Events")
+    STATUS_BADGE = {"Confirmed": "green", "Tentative": "orange", "Inquiry": "blue", "Completed": "gray"}
 
-    with st.form("add_upcoming_event"):
-        st.subheader("Add a new one")
-        name = st.text_input("Event name")
-        col1, col2 = st.columns(2)
-        date = col1.date_input("Date", value=dt.date.today())
-        location = col2.text_input("Location")
-        status = st.selectbox("Status", sheets.UPCOMING_STATUSES)
-        notes = st.text_area("Notes")
-        who = st.selectbox("Added by", ["Joseph", "Ethan", "Josh"])
-        if st.form_submit_button("Add"):
-            if name.strip():
-                sheets.add_upcoming_event(name, date, location, status, notes, who)
-                st.success(f"Added {name}.")
-                st.rerun()
-            else:
-                st.error("Event name is required.")
+    title_col, add_col = st.columns([5, 1])
+    title_col.title("Upcoming Events")
+    with add_col:
+        st.write("")  # vertical alignment nudge
+        with st.popover("➕ Add Event", use_container_width=True):
+            st.subheader("Add a new event")
+            name = st.text_input("Event name")
+            date = st.date_input("Date", value=dt.date.today())
+            location = st.text_input("Location")
+            status = st.selectbox("Status", sheets.UPCOMING_STATUSES)
+            notes = st.text_area("Notes")
+            who = st.selectbox("Added by", ["Joseph", "Ethan", "Josh"])
+            if st.button("Add", type="primary"):
+                if name.strip():
+                    sheets.add_upcoming_event(name, date, location, status, notes, who)
+                    st.success(f"Added {name}.")
+                    st.rerun()
+                else:
+                    st.error("Event name is required.")
 
-    st.subheader("All upcoming events")
     items = sheets.read_upcoming_events()
     items.sort(key=lambda x: x["date"])
+
     if not items:
-        st.info("Nothing here yet, add one above.")
-    for item in items:
-        with st.expander(f"{item['event']} — {item['date']} ({item['status']})"):
-            st.write(f"**Location:** {item['location'] or 'TBD'}")
-            st.write(f"**Added by:** {item['created_by']} · **Last updated:** {item['last_updated']}")
-            new_status = st.selectbox("Status", sheets.UPCOMING_STATUSES,
-                                       index=sheets.UPCOMING_STATUSES.index(item["status"]) if item["status"] in sheets.UPCOMING_STATUSES else 0,
-                                       key=f"status_{item['row']}")
-            new_notes = st.text_area("Notes", value=item["notes"], key=f"notes_{item['row']}")
-            if st.button("Save changes", key=f"save_{item['row']}"):
-                sheets.update_upcoming_event(item["row"], new_status, new_notes)
-                st.success("Saved.")
-                st.rerun()
+        st.info("Nothing here yet — click **➕ Add Event** to add one.")
+    else:
+        today = dt.date.today()
+        for item in items:
+            try:
+                event_date = dt.date.fromisoformat(item["date"])
+                days_out = (event_date - today).days
+                when = ("Today" if days_out == 0 else
+                        f"in {days_out} days" if days_out > 0 else
+                        f"{-days_out} days ago")
+            except ValueError:
+                when = ""
+
+            with st.container(border=True):
+                c1, c2 = st.columns([4, 1])
+                c1.markdown(f"### {item['event']}")
+                with c2:
+                    st.badge(item["status"], color=STATUS_BADGE.get(item["status"], "gray"))
+                st.write(f"📅 **{item['date']}**" + (f"  ·  {when}" if when else "") +
+                         f"  ·  📍 {item['location'] or 'TBD'}")
+
+                with st.expander("Details & edit"):
+                    st.write(f"**Added by:** {item['created_by']} · **Last updated:** {item['last_updated']}")
+                    if item["notes"]:
+                        st.write(f"**Notes:** {item['notes']}")
+                    new_status = st.selectbox(
+                        "Status", sheets.UPCOMING_STATUSES,
+                        index=sheets.UPCOMING_STATUSES.index(item["status"]) if item["status"] in sheets.UPCOMING_STATUSES else 0,
+                        key=f"status_{item['row']}")
+                    new_notes = st.text_area("Notes", value=item["notes"], key=f"notes_{item['row']}")
+                    if st.button("Save changes", key=f"save_{item['row']}"):
+                        sheets.update_upcoming_event(item["row"], new_status, new_notes)
+                        st.success("Saved.")
+                        st.rerun()
 
 # ------------------------------------------------------------- ADD PAYMENT
 elif page == "Add Payment":
