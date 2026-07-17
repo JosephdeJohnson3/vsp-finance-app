@@ -2,9 +2,12 @@
 the team already uses; never touches the 7 original tabs' formulas, only their
 designated input cells, plus one new tab this app owns entirely."""
 import datetime as dt
+import re
 import gspread
 import streamlit as st
 from google.oauth2.service_account import Credentials
+
+from utils import parse_money
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -100,19 +103,98 @@ def spreadsheet_url():
     return f"https://docs.google.com/spreadsheets/d/{st.secrets['sheet_id']}/edit"
 
 
+def _ar_total_row(ws):
+    """Finds the TOTAL row; data rows are AR_FIRST_ROW .. total-1. The block grows
+    when partial payments split a row, so this is scanned, never hardcoded."""
+    col_a = ws.col_values(1)
+    for i, v in enumerate(col_a, start=1):
+        if i >= AR_FIRST_ROW and v.strip().upper() == "TOTAL":
+            return i
+    raise RuntimeError("Accounts Receivable TOTAL row not found.")
+
+
 @st.cache_data(ttl=30)
 def read_accounts_receivable():
     ws = _ws("Accounts Receivable")
-    rows = ws.get(f"A{AR_FIRST_ROW}:M{AR_LAST_ROW}")
+    total_row = _ar_total_row(ws)
+    rows = ws.get(f"A{AR_FIRST_ROW}:M{total_row - 1}")
     out = []
     for i, r in enumerate(rows):
         r = r + [""] * (13 - len(r))
+        if not r[0]:
+            continue
         out.append({
             "row": AR_FIRST_ROW + i, "event": r[0], "location": r[1], "gross": r[2],
             "joseph_amt": r[6], "ethan_amt": r[7], "josh_amt": r[8],
             "status": r[9], "date_received": r[10], "notes": r[12],
         })
     return out
+
+
+def _retarget_formula(formula, old_row, new_row):
+    if not isinstance(formula, str) or not formula.startswith("="):
+        return formula
+    return re.sub(rf"([A-Z]){old_row}(?![0-9])", lambda m: f"{m.group(1)}{new_row}", formula)
+
+
+def _record_ar_payment(ws, row, amount, date_str):
+    """Records a payment against an AR row. Full amount -> mark Received (as before).
+    Partial -> the row becomes '(Payment N)' Received for the amount, and a new
+    '(Remaining)' Pending row is inserted below it for the rest, with identical
+    split formulas. TOTAL row sums are re-spanned afterward."""
+    src = ws.get(f"A{row}:M{row}", value_render_option="FORMULA")[0]
+    src = src + [""] * (13 - len(src))
+    name, location, note = src[0], src[1], src[12]
+    gross = parse_money(ws.acell(f"C{row}").value)
+    amount = round(float(amount), 2)
+    if amount <= 0:
+        raise ValueError("Amount received must be more than $0.")
+    if amount > gross + 0.005:
+        raise ValueError(f"Amount received (${amount:,.2f}) is more than what's owed on this line (${gross:,.2f}).")
+
+    if amount >= gross - 0.005:  # full payment of this line
+        ws.update(range_name=f"J{row}:K{row}", values=[["Received", date_str]])
+        return {"partial": False, "received": gross, "remaining": 0.0}
+
+    # ---- partial: split the row ----
+    base = name[:-12] if name.endswith(" (Remaining)") else name
+    total_row = _ar_total_row(ws)
+    col_a = [v[0] if v else "" for v in ws.get(f"A{AR_FIRST_ROW}:A{total_row - 1}")]
+    n_payments = sum(1 for v in col_a if v.startswith(base + " (Payment")) + 1
+    remaining = round(gross - amount, 2)
+
+    new_row_idx = row + 1
+    new_row = [
+        f"{base} (Remaining)", location, remaining,
+        src[3], src[4],                                # D, E: split % inputs, copied
+        _retarget_formula(src[5], row, new_row_idx),   # F
+        _retarget_formula(src[6], row, new_row_idx),   # G
+        _retarget_formula(src[7], row, new_row_idx),   # H
+        _retarget_formula(src[8], row, new_row_idx),   # I
+        "Pending", "",
+        _retarget_formula(src[11], row, new_row_idx),  # L (month)
+        note,
+    ]
+    ws.insert_row(new_row, new_row_idx, value_input_option="USER_ENTERED", inherit_from_before=True)
+
+    ws.update(range_name=f"A{row}", values=[[f"{base} (Payment {n_payments})"]])
+    ws.update(range_name=f"C{row}", values=[[amount]], value_input_option="USER_ENTERED")
+    ws.update(range_name=f"J{row}:K{row}", values=[["Received", date_str]])
+
+    # Re-span TOTAL sums (an insert at the block's bottom edge doesn't auto-extend them)
+    t = _ar_total_row(ws)
+    for col in ("C", "G", "H", "I"):
+        ws.update(range_name=f"{col}{t}", values=[[f"=SUM({col}{AR_FIRST_ROW}:{col}{t - 1})"]],
+                  value_input_option="USER_ENTERED")
+    return {"partial": True, "received": amount, "remaining": remaining}
+
+
+def record_ar_payment(row, amount, date_str=None):
+    date_str = date_str or dt.date.today().isoformat()
+    ws = _ws("Accounts Receivable")
+    result = _record_ar_payment(ws, row, amount, date_str)
+    st.cache_data.clear()
+    return result
 
 
 def mark_ar_received(row, date_str=None):

@@ -322,8 +322,10 @@ elif page == "Event Log":
 # ------------------------------------------------------- ACCOUNTS RECEIVABLE
 elif page == "Accounts Receivable":
     st.title("Accounts Receivable")
-    st.caption("The already-booked events, split 50/25/25 the old way. Mark one Received once "
-               "the money actually arrives.")
+    st.caption("The already-booked events, split 50/25/25 the old way. Record what you've "
+               "received as it arrives. A partial amount (like a deposit) splits the line: "
+               "the received part gets counted in its month, and a '(Remaining)' line stays "
+               "pending for the rest.")
     ar = sheets.read_accounts_receivable()
     for row in ar:
         label = f"{row['event']} — {row['location']} — {fmt_money(parse_money(row['gross']))} ({row['status']})"
@@ -335,9 +337,25 @@ elif page == "Accounts Receivable":
             if row["notes"]:
                 st.write(f"**Notes:** {row['notes']}")
             if row["status"] == "Pending":
-                if st.button("Mark Received", key=f"recv_{row['row']}"):
-                    sheets.mark_ar_received(row["row"])
-                    st.success("Marked received.")
-                    st.rerun()
+                owed = parse_money(row["gross"])
+                c1, c2 = st.columns(2)
+                amt = c1.number_input("Amount received ($)", min_value=0.0, max_value=owed,
+                                      value=owed, step=25.0, key=f"amt_{row['row']}",
+                                      help="Defaults to the full amount owed on this line. "
+                                           "Enter less if you only received a deposit.")
+                recv_date = c2.date_input("Date received", value=dt.date.today(),
+                                          key=f"date_{row['row']}")
+                if st.button("Record payment", key=f"recv_{row['row']}"):
+                    try:
+                        result = sheets.record_ar_payment(row["row"], amt, recv_date.isoformat())
+                        if result["partial"]:
+                            st.success(f"Recorded {fmt_money(result['received'])} received. "
+                                       f"{fmt_money(result['remaining'])} still pending on a new "
+                                       "'(Remaining)' line.")
+                        else:
+                            st.success(f"Recorded {fmt_money(result['received'])} — paid in full.")
+                        st.rerun()
+                    except ValueError as e:
+                        st.error(str(e))
             else:
                 st.write(f"Received {row['date_received']}")

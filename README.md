@@ -109,8 +109,11 @@ Streamlit Cloud deploys from a GitHub repository.
 - **Event Log** — every payment ever entered (via the app or by hand in the sheet).
   Mark one "Paid" once the money actually lands. For deposit/balance pairs, mark
   each row separately as each payment comes in.
-- **Accounts Receivable** — the 4 already-booked events on the old 50/25/25 split.
-  Mark one "Received" once it arrives.
+- **Accounts Receivable** — the already-booked events on the old 50/25/25 split.
+  Enter the amount received and the date as money arrives. The full amount marks
+  the line received; a partial amount (like a deposit) splits the line into a
+  "(Payment N)" received line and a "(Remaining)" pending line, so every dollar
+  is counted in the month it actually arrived.
 
 ## If something breaks
 
