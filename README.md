@@ -100,11 +100,15 @@ Streamlit Cloud deploys from a GitHub repository.
   everyone's monthly payout over time.
 - **Upcoming Events** — add any show you're tracking (booked or not), with
   notes. This lives entirely in its own tab and never touches your financial tabs.
-- **Add Payment** — enter a new booked event: name, date, gross amount, split type,
+- **Add Payment** — enter a new booked event: name, date, total fee, split type,
   and who found the lead. It writes straight into the Event Log tab and shows you
-  the computed split instantly.
+  the computed split instantly. If the client pays a deposit first (usually 50%)
+  and the rest later, pick "Deposit now, balance later" — the app creates two
+  rows, "(Deposit)" and "(Balance)", so each chunk counts in the month it
+  actually arrives.
 - **Event Log** — every payment ever entered (via the app or by hand in the sheet).
-  Mark one "Paid" once the money actually lands.
+  Mark one "Paid" once the money actually lands. For deposit/balance pairs, mark
+  each row separately as each payment comes in.
 - **Accounts Receivable** — the 4 already-booked events on the old 50/25/25 split.
   Mark one "Received" once it arrives.
 

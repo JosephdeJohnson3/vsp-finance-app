@@ -240,16 +240,23 @@ elif page == "Add Payment":
         name = st.text_input("Event / client name")
         col1, col2 = st.columns(2)
         date = col1.date_input("Event date", value=dt.date.today())
-        gross = col2.number_input("Gross amount ($)", min_value=0.0, step=50.0)
+        gross = col2.number_input("Total performance fee ($)", min_value=0.0, step=50.0)
         split_type = st.selectbox("Split type", sheets.SPLIT_TYPES)
         lead = st.selectbox("Who found / ran point on this booking?", sheets.LEAD_GENERATORS)
+        pay_structure = st.radio(
+            "Payment structure",
+            ["Paid in full (one payment)", "Deposit now, balance later"],
+            help="Deposit + balance creates two rows in the Event Log so each chunk counts "
+                 "in the month it actually arrives. Mark each one Paid separately.")
+        deposit_pct = st.slider("Deposit %", min_value=10, max_value=90, value=50, step=5,
+                                help="Only used if you picked deposit + balance. Almost always 50%.")
         notes = st.text_input("Notes (optional)")
         submitted = st.form_submit_button("Add payment")
 
     if submitted:
         if not name.strip() or gross <= 0:
-            st.error("Event name and a gross amount greater than $0 are required.")
-        else:
+            st.error("Event name and a total fee greater than $0 are required.")
+        elif pay_structure.startswith("Paid in full"):
             try:
                 result = sheets.append_event_log_entry(name, date, gross, split_type, lead, notes)
                 st.success(f"Added to Event Log, row {result['row']}.")
@@ -258,7 +265,31 @@ elif page == "Add Payment":
                 c2.metric("Joseph", fmt_money(parse_money(result["joseph_amt"])))
                 c3.metric("Ethan", fmt_money(parse_money(result["ethan_amt"])))
                 c4.metric("Josh", fmt_money(parse_money(result["josh_amt"])))
-            except RuntimeError as e:
+            except (RuntimeError, ValueError) as e:
+                st.error(str(e))
+        else:
+            try:
+                deposit_amount = round(gross * deposit_pct / 100.0, 2)
+                pair = sheets.append_event_log_deposit_pair(
+                    name, date, gross, deposit_amount, split_type, lead, notes)
+                st.success(
+                    f"Added two rows to the Event Log: deposit "
+                    f"{fmt_money(pair['deposit_amount'])} (row {pair['deposit']['row']}) and balance "
+                    f"{fmt_money(pair['balance_amount'])} (row {pair['balance']['row']}). "
+                    "Mark each one Paid when that money actually arrives.")
+                st.subheader("Deposit split")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("VSP (10%)", fmt_money(parse_money(pair["deposit"]["vsp_amt"])))
+                c2.metric("Joseph", fmt_money(parse_money(pair["deposit"]["joseph_amt"])))
+                c3.metric("Ethan", fmt_money(parse_money(pair["deposit"]["ethan_amt"])))
+                c4.metric("Josh", fmt_money(parse_money(pair["deposit"]["josh_amt"])))
+                st.subheader("Balance split")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("VSP (10%)", fmt_money(parse_money(pair["balance"]["vsp_amt"])))
+                c2.metric("Joseph", fmt_money(parse_money(pair["balance"]["joseph_amt"])))
+                c3.metric("Ethan", fmt_money(parse_money(pair["balance"]["ethan_amt"])))
+                c4.metric("Josh", fmt_money(parse_money(pair["balance"]["josh_amt"])))
+            except (RuntimeError, ValueError) as e:
                 st.error(str(e))
 
 # ----------------------------------------------------------------- EVENT LOG

@@ -11,7 +11,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 AR_FIRST_ROW = 4
 AR_LAST_ROW = 7
 EVENTLOG_FIRST_ROW = 4
-EVENTLOG_LAST_ROW = 33
+EVENTLOG_LAST_ROW = 63  # extended 2026-07-15 (was 33) to make room for deposit+balance row pairs
 SPLIT_TYPES = ["Equal (30/30/30)", "Lead Bonus (40/25/25)", "Partial Lead (35/27.5/27.5)"]
 LEAD_GENERATORS = ["Joseph", "Ethan", "Josh", "N/A"]
 UPCOMING_TAB = "Upcoming Events"
@@ -170,6 +170,27 @@ def append_event_log_entry(event_name, event_date, gross_amount, split_type, lea
         "joseph_pct": computed[4], "ethan_pct": computed[5], "josh_pct": computed[6],
         "joseph_amt": computed[7], "ethan_amt": computed[8], "josh_amt": computed[9],
     }
+
+
+def append_event_log_deposit_pair(event_name, event_date, gross_amount, deposit_amount,
+                                  split_type, lead_generator, notes=""):
+    """Partial-payment support: writes TWO ledger rows — '(Deposit)' and '(Balance)' —
+    so each chunk can be marked Paid in the month it actually arrives. Monthly Summary
+    then attributes each chunk to the right month automatically, with no formula changes.
+    Deposit is almost always 50% of the fee, but any amount < gross works."""
+    deposit_amount = round(deposit_amount, 2)
+    balance_amount = round(gross_amount - deposit_amount, 2)
+    if deposit_amount <= 0 or balance_amount <= 0:
+        raise ValueError("Deposit must be more than $0 and less than the full amount.")
+    total_note = f"{'{:,.2f}'.format(gross_amount)} total"
+    dep = append_event_log_entry(
+        f"{event_name} (Deposit)", event_date, deposit_amount, split_type, lead_generator,
+        (notes + " · " if notes else "") + f"Deposit portion of ${total_note}")
+    bal = append_event_log_entry(
+        f"{event_name} (Balance)", event_date, balance_amount, split_type, lead_generator,
+        (notes + " · " if notes else "") + f"Balance portion of ${total_note}")
+    return {"deposit": dep, "balance": bal,
+            "deposit_amount": deposit_amount, "balance_amount": balance_amount}
 
 
 def mark_event_log_paid(row, date_str=None):
