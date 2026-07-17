@@ -1,7 +1,11 @@
-"""VSP Finance — internal Streamlit app. Reads/writes the same Google Sheet the
-team already uses for financial tracking (see finance/VSP-Financial-Tracker.xlsx).
-Adds one new tab ("Upcoming Events") for event notes; never edits the
-original tabs' formulas, only the input cells VSP already fills by hand."""
+"""VSP Finance — a simple money tracker for The Virginia Strings Project.
+
+Four pages, backed by one Google Sheet (the single source of truth):
+  Dashboard — where the money stands
+  Events    — every booking, its money, each person's share, and status
+  Payouts   — money paid out to the group
+  History   — every past month
+"""
 import datetime as dt
 
 import plotly.graph_objects as go
@@ -10,11 +14,10 @@ import streamlit as st
 import sheets
 from utils import fmt_money, parse_money
 
-PEOPLE_COLORS = {"Joseph": "#2a78d6", "Ethan": "#1baf7a", "Josh": "#eda100", "VSP": "#008300"}
-INK = "#0b0b0b"
-MUTED = "#898781"
-GRID = "#e1e0d9"
-SURFACE = "#fcfcfb"
+COLORS = {"Joseph": "#2a78d6", "Ethan": "#1baf7a", "Josh": "#eda100", "VSP": "#008300"}
+INK, MUTED, GRID, SURFACE = "#0b0b0b", "#898781", "#e1e0d9", "#fcfcfb"
+STATUS_COLOR = {"Inquiry": "gray", "Tentative": "orange", "Confirmed": "blue",
+                "Deposit In": "violet", "Paid in Full": "green"}
 
 st.set_page_config(page_title="VSP Finance", page_icon="🎻", layout="wide")
 
@@ -40,322 +43,215 @@ try:
     sheets.check_connection()
 except Exception as e:
     st.error("Not connected to Google Sheets yet.")
-    st.write(
-        "This is expected until the Google Sheets setup in `app/README.md` is finished "
-        "(the Google Cloud service account + sharing the sheet with it). Once that's done "
-        "this message goes away and real data shows up everywhere."
-    )
-    with st.expander("Technical details (for whoever's doing the setup)"):
+    with st.expander("Details"):
         st.code(str(e))
     st.stop()
 
 st.sidebar.title("🎻 VSP Finance")
-st.sidebar.markdown(f"[📊 Open the Spreadsheet]({sheets.spreadsheet_url()})")
+st.sidebar.markdown(f"[📊 Open the spreadsheet]({sheets.spreadsheet_url()})")
 st.sidebar.divider()
-page = st.sidebar.radio(
-    "Go to",
-    ["Dashboard", "History", "Upcoming Events", "Add Payment", "Event Log", "Accounts Receivable"],
-)
+page = st.sidebar.radio("Go to", ["Dashboard", "Events", "Payouts", "History"])
 
-def months_to_date(months_data):
-    """Filters out months that haven't happened yet, so a 2+ year runway of
-    pre-built formula rows doesn't clutter the UI with empty future months."""
-    cutoff = dt.date.today().strftime("%Y-%m")
-    return [m for m in months_data if m["month"] <= cutoff]
 
-# ---------------------------------------------------------------- DASHBOARD
+def money(x):
+    return fmt_money(parse_money(x))
+
+
+# ============================================================== DASHBOARD
 if page == "Dashboard":
     st.title("Dashboard")
     d = sheets.read_dashboard()
 
+    c1, c2 = st.columns(2)
+    c1.metric("💰 Account balance", money(d["balance"]), help="Actual cash on hand right now.")
+    c2.metric("🏦 VSP fund", money(d["vsp_fund"]), help="Company's cut plus the reserve.")
+
+    st.subheader("Still owed to each person")
+    st.caption("Money earned from payments received, but not yet paid out. This is what to pay next.")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Current Balance", fmt_money(parse_money(d["current_balance"])))
-    c2.metric("Reserve Floor", fmt_money(parse_money(d["reserve"])))
-    c3.metric("VSP Fund Balance", fmt_money(parse_money(d["vsp_fund_balance"])))
-    c4.metric("AR Outstanding", fmt_money(parse_money(d["ar_outstanding"])))
+    c1.metric("Joseph", money(d["owed_joseph"]))
+    c2.metric("Ethan", money(d["owed_ethan"]))
+    c3.metric("Josh", money(d["owed_josh"]))
+    c4.metric("Total to pay out", money(d["owed_total"]))
 
-    st.subheader(f"This Month's Payout ({d['current_month']})")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Joseph", fmt_money(parse_money(d["this_month_joseph"])))
-    c2.metric("Ethan", fmt_money(parse_money(d["this_month_ethan"])))
-    c3.metric("Josh", fmt_money(parse_money(d["this_month_josh"])))
-    c4.metric("Total", fmt_money(parse_money(d["this_month_total"])))
+    st.subheader("Pipeline")
+    st.metric("Still to collect on confirmed events", money(d["pipeline"]),
+              help="Money still coming in from events marked Confirmed.")
 
-    st.subheader("Monthly Payout by Person (last 6 months)")
-    months_data = months_to_date(sheets.read_monthly_summary())[-6:]
-    if months_data:
-        month_labels = [m["month"] for m in months_data]
-        fig = go.Figure()
-        for person, color in [("joseph", PEOPLE_COLORS["Joseph"]), ("ethan", PEOPLE_COLORS["Ethan"]),
-                               ("josh", PEOPLE_COLORS["Josh"])]:
-            values = [parse_money(m[person]) for m in months_data]
-            fig.add_bar(
-                name=person.capitalize(), x=month_labels, y=values,
-                marker_color=color,
-                text=[fmt_money(v) if v else "" for v in values],
-                textposition="outside",
-            )
-        fig.update_layout(
-            barmode="group", plot_bgcolor=SURFACE, paper_bgcolor=SURFACE,
-            font=dict(color=INK), legend_title_text="",
-            xaxis=dict(showgrid=False, linecolor=MUTED),
-            yaxis=dict(showgrid=True, gridcolor=GRID, tickprefix="$", zeroline=False),
-            margin=dict(t=10, b=10),
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    st.subheader("Next events")
+    events = [e for e in sheets.read_events()
+              if e["status"] not in ("Paid in Full",) and e["date"]]
+    events.sort(key=lambda e: e["date"])
+    if events:
+        for e in events[:5]:
+            total = money(e["total"]) if parse_money(e["total"]) else "TBD"
+            st.write(f"**{e['event']}** — {e['date']} · {e['location'] or 'TBD'} · "
+                     f"{total} · _{e['status']}_")
     else:
-        st.info("No monthly data yet.")
+        st.info("No upcoming events. Add one on the Events page.")
 
-    st.subheader("Combined Total Payout (Liquidation + Accounts Receivable)")
-    rows = []
-    for name, key in [("Joseph", "combined_joseph"), ("Ethan", "combined_ethan"), ("Josh", "combined_josh")]:
-        c = d[key]
-        rows.append({"Person": name, "Liquidation": c["liquidation"], "Accounts Receivable": c["ar"], "Total": c["total"]})
-    st.table(rows)
-    st.caption(f"Grand total once everything is collected: {d['grand_total']['total']}")
+# ================================================================= EVENTS
+elif page == "Events":
+    st.title("Events")
+    st.caption("Every booking, how much it's worth, each person's share, and where the money is.")
 
-# ------------------------------------------------------------------- HISTORY
-elif page == "History":
-    st.title("History")
-    st.caption("Every month to date, plus lifetime totals. Automatically grows as new months pass "
-               "(the spreadsheet has formula rows built out through the end of 2028).")
+    # ---- add event ----
+    with st.popover("➕ Add event", use_container_width=False):
+        st.subheader("New event")
+        name = st.text_input("Event / client name")
+        c1, c2 = st.columns(2)
+        date = c1.date_input("Date", value=dt.date.today())
+        location = c2.text_input("Location")
+        status = st.selectbox("Status", sheets.STATUSES, index=2)
+        total = st.number_input("Total fee ($)", min_value=0.0, step=50.0,
+                                help="The full amount the client pays.")
+        preset = st.selectbox("Split", list(sheets.SPLIT_PRESETS.keys()), index=0,
+                              help="Pick a preset, then adjust the four percentages if needed. "
+                                   "They must add up to 100.")
+        defaults = sheets.SPLIT_PRESETS[preset] or (0, 50, 25, 25)
+        c1, c2, c3, c4 = st.columns(4)
+        vsp_pct = c1.number_input("VSP %", 0, 100, defaults[0], step=5)
+        jo_pct = c2.number_input("Joseph %", 0, 100, defaults[1], step=5)
+        e_pct = c3.number_input("Ethan %", 0, 100, defaults[2], step=5)
+        josh_pct = c4.number_input("Josh %", 0, 100, defaults[3], step=5)
+        pct_sum = vsp_pct + jo_pct + e_pct + josh_pct
+        if pct_sum != 100:
+            st.warning(f"Percentages add up to {pct_sum}%, not 100%.")
+        notes = st.text_area("Notes / details")
+        if st.button("Add event", type="primary"):
+            if not name.strip():
+                st.error("Event name is required.")
+            elif pct_sum != 100 and total > 0:
+                st.error("The four percentages must add up to 100.")
+            else:
+                sheets.add_event(name, date, location, status,
+                                 total if total > 0 else "", vsp_pct, jo_pct, e_pct, josh_pct,
+                                 notes=notes)
+                st.success(f"Added {name}.")
+                st.rerun()
 
-    months_data = months_to_date(sheets.read_monthly_summary())
+    events = sheets.read_events()
+    events.sort(key=lambda e: (e["status"] == "Paid in Full", e["date"] or "9999"))
+    if not events:
+        st.info("No events yet — click **➕ Add event**.")
 
-    if not months_data:
-        st.info("No historical data yet.")
-    else:
-        lifetime = {"joseph": 0.0, "ethan": 0.0, "josh": 0.0, "vsp": 0.0, "total": 0.0}
-        for m in months_data:
-            for key in lifetime:
-                lifetime[key] += parse_money(m[key])
+    for e in events:
+        total_disp = money(e["total"]) if parse_money(e["total"]) else "TBD"
+        with st.container(border=True):
+            top1, top2 = st.columns([4, 1])
+            top1.markdown(f"### {e['event']}")
+            top2.badge(e["status"], color=STATUS_COLOR.get(e["status"], "gray"))
+            st.write(f"📅 {e['date'] or 'TBD'} · 📍 {e['location'] or 'TBD'} · **{total_disp}**")
 
-        st.subheader("Lifetime Totals")
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Joseph", fmt_money(lifetime["joseph"]))
-        c2.metric("Ethan", fmt_money(lifetime["ethan"]))
-        c3.metric("Josh", fmt_money(lifetime["josh"]))
-        c4.metric("VSP Contributions", fmt_money(lifetime["vsp"]))
-        c5.metric("Grand Total", fmt_money(lifetime["total"]))
-        st.caption("VSP Contributions = the 10% collected from paid events only, not counting the "
-                   "$1,000 reserve (see Dashboard for the full VSP Fund Balance).")
+            if parse_money(e["total"]):
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Joseph", money(e["joseph_amt"]))
+                c2.metric("Ethan", money(e["ethan_amt"]))
+                c3.metric("Josh", money(e["josh_amt"]))
+                c4.metric("VSP", money(e["vsp_amt"]))
+                recv, rem = parse_money(e["received"]), parse_money(e["remaining"])
+                if recv > 0:
+                    st.write(f"✅ Received **{money(e['received'])}**"
+                             + (f" · still owed **{money(e['remaining'])}**" if rem > 0.005 else " · paid in full"))
 
-        st.subheader("Every Month to Date")
-        month_labels = [m["month"] for m in months_data]
-        fig = go.Figure()
-        for person, color in [("joseph", PEOPLE_COLORS["Joseph"]), ("ethan", PEOPLE_COLORS["Ethan"]),
-                               ("josh", PEOPLE_COLORS["Josh"])]:
-            values = [parse_money(m[person]) for m in months_data]
-            fig.add_bar(
-                name=person.capitalize(), x=month_labels, y=values,
-                marker_color=color,
-                text=[fmt_money(v) if v else "" for v in values],
-                textposition="outside",
-            )
-        fig.update_layout(
-            barmode="group", plot_bgcolor=SURFACE, paper_bgcolor=SURFACE,
-            font=dict(color=INK), legend_title_text="",
-            xaxis=dict(showgrid=False, linecolor=MUTED),
-            yaxis=dict(showgrid=True, gridcolor=GRID, tickprefix="$", zeroline=False),
-            margin=dict(t=10, b=10),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.subheader("Monthly Breakdown Table")
-        table_rows = [{"Month": m["month"], "Joseph": m["joseph"], "Ethan": m["ethan"],
-                       "Josh": m["josh"], "VSP Contributions": m["vsp"], "Total": m["total"]}
-                      for m in reversed(months_data)]
-        st.table(table_rows)
-
-# ------------------------------------------------------------- UPCOMING EVENTS
-elif page == "Upcoming Events":
-    STATUS_BADGE = {"Confirmed": "green", "Tentative": "orange", "Inquiry": "blue", "Completed": "gray"}
-
-    title_col, add_col = st.columns([5, 1])
-    title_col.title("Upcoming Events")
-    with add_col:
-        st.write("")  # vertical alignment nudge
-        with st.popover("➕ Add Event", use_container_width=True):
-            st.subheader("Add a new event")
-            name = st.text_input("Event name")
-            date = st.date_input("Date", value=dt.date.today())
-            location = st.text_input("Location")
-            status = st.selectbox("Status", sheets.UPCOMING_STATUSES)
-            notes = st.text_area("Notes")
-            who = st.selectbox("Added by", ["Joseph", "Ethan", "Josh"])
-            if st.button("Add", type="primary"):
-                if name.strip():
-                    sheets.add_upcoming_event(name, date, location, status, notes, who)
-                    st.success(f"Added {name}.")
+            with st.expander("Details, notes & update"):
+                if e["notes"]:
+                    st.write(e["notes"])
+                st.markdown("**Update status**")
+                new_status = st.selectbox("Status", sheets.STATUSES,
+                                          index=sheets.STATUSES.index(e["status"]) if e["status"] in sheets.STATUSES else 0,
+                                          key=f"st_{e['row']}", label_visibility="collapsed")
+                if st.button("Save status", key=f"savest_{e['row']}"):
+                    sheets.update_event_status(e["row"], new_status)
                     st.rerun()
-                else:
-                    st.error("Event name is required.")
 
-    items = sheets.read_upcoming_events()
-    items.sort(key=lambda x: x["date"])
-
-    if not items:
-        st.info("Nothing here yet — click **➕ Add Event** to add one.")
-    else:
-        today = dt.date.today()
-        for item in items:
-            try:
-                event_date = dt.date.fromisoformat(item["date"])
-                days_out = (event_date - today).days
-                when = ("Today" if days_out == 0 else
-                        f"in {days_out} days" if days_out > 0 else
-                        f"{-days_out} days ago")
-            except ValueError:
-                when = ""
-
-            with st.container(border=True):
-                c1, c2 = st.columns([4, 1])
-                c1.markdown(f"### {item['event']}")
-                with c2:
-                    st.badge(item["status"], color=STATUS_BADGE.get(item["status"], "gray"))
-                st.write(f"📅 **{item['date']}**" + (f"  ·  {when}" if when else "") +
-                         f"  ·  📍 {item['location'] or 'TBD'}")
-
-                with st.expander("Details & edit"):
-                    st.write(f"**Added by:** {item['created_by']} · **Last updated:** {item['last_updated']}")
-                    if item["notes"]:
-                        st.write(f"**Notes:** {item['notes']}")
-                    new_status = st.selectbox(
-                        "Status", sheets.UPCOMING_STATUSES,
-                        index=sheets.UPCOMING_STATUSES.index(item["status"]) if item["status"] in sheets.UPCOMING_STATUSES else 0,
-                        key=f"status_{item['row']}")
-                    new_notes = st.text_area("Notes", value=item["notes"], key=f"notes_{item['row']}")
-                    if st.button("Save changes", key=f"save_{item['row']}"):
-                        sheets.update_upcoming_event(item["row"], new_status, new_notes)
+                if parse_money(e["total"]):
+                    st.markdown("**Record a payment received**")
+                    st.caption("Enter the total received so far (deposit, then update to the full amount later).")
+                    cc1, cc2 = st.columns(2)
+                    amt = cc1.number_input("Received so far ($)", min_value=0.0,
+                                           max_value=float(parse_money(e["total"])),
+                                           value=float(parse_money(e["received"])), step=50.0,
+                                           key=f"rc_{e['row']}")
+                    rdate = cc2.date_input("Date received", value=dt.date.today(), key=f"rd_{e['row']}")
+                    if st.button("Save payment", key=f"savercv_{e['row']}"):
+                        auto = ("Paid in Full" if amt >= parse_money(e["total"]) - 0.005
+                                else "Deposit In" if amt > 0 else e["status"])
+                        sheets.update_event_received(e["row"], amt, rdate, status=auto)
                         st.success("Saved.")
                         st.rerun()
 
-# ------------------------------------------------------------- ADD PAYMENT
-elif page == "Add Payment":
-    st.title("Add a New Payment")
-    st.caption("This writes directly into the Event Log tab of the spreadsheet. VSP automatically "
-               "takes 10% off the top; the rest splits per whichever option you pick below.")
+# ================================================================ PAYOUTS
+elif page == "Payouts":
+    st.title("Payouts")
+    st.caption("Money paid out to the group. Log each dividend or payment here so the Dashboard "
+               "knows what's still owed.")
 
-    with st.form("add_payment"):
-        name = st.text_input("Event / client name")
-        col1, col2 = st.columns(2)
-        date = col1.date_input("Event date", value=dt.date.today())
-        gross = col2.number_input("Total performance fee ($)", min_value=0.0, step=50.0)
-        split_type = st.selectbox("Split type", sheets.SPLIT_TYPES)
-        lead = st.selectbox("Who found / ran point on this booking?", sheets.LEAD_GENERATORS)
-        pay_structure = st.radio(
-            "Payment structure",
-            ["Paid in full (one payment)", "Deposit now, balance later"],
-            help="Deposit + balance creates two rows in the Event Log so each chunk counts "
-                 "in the month it actually arrives. Mark each one Paid separately.")
-        deposit_pct = st.slider("Deposit %", min_value=10, max_value=90, value=50, step=5,
-                                help="Only used if you picked deposit + balance. Almost always 50%.")
-        notes = st.text_input("Notes (optional)")
-        submitted = st.form_submit_button("Add payment")
+    d = sheets.read_dashboard()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Owed to Joseph", money(d["owed_joseph"]))
+    c2.metric("Owed to Ethan", money(d["owed_ethan"]))
+    c3.metric("Owed to Josh", money(d["owed_josh"]))
 
-    if submitted:
-        if not name.strip() or gross <= 0:
-            st.error("Event name and a total fee greater than $0 are required.")
-        elif pay_structure.startswith("Paid in full"):
-            try:
-                result = sheets.append_event_log_entry(name, date, gross, split_type, lead, notes)
-                st.success(f"Added to Event Log, row {result['row']}.")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("VSP (10%)", fmt_money(parse_money(result["vsp_amt"])))
-                c2.metric("Joseph", fmt_money(parse_money(result["joseph_amt"])))
-                c3.metric("Ethan", fmt_money(parse_money(result["ethan_amt"])))
-                c4.metric("Josh", fmt_money(parse_money(result["josh_amt"])))
-            except (RuntimeError, ValueError) as e:
-                st.error(str(e))
-        else:
-            try:
-                deposit_amount = round(gross * deposit_pct / 100.0, 2)
-                pair = sheets.append_event_log_deposit_pair(
-                    name, date, gross, deposit_amount, split_type, lead, notes)
-                st.success(
-                    f"Added two rows to the Event Log: deposit "
-                    f"{fmt_money(pair['deposit_amount'])} (row {pair['deposit']['row']}) and balance "
-                    f"{fmt_money(pair['balance_amount'])} (row {pair['balance']['row']}). "
-                    "Mark each one Paid when that money actually arrives.")
-                st.subheader("Deposit split")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("VSP (10%)", fmt_money(parse_money(pair["deposit"]["vsp_amt"])))
-                c2.metric("Joseph", fmt_money(parse_money(pair["deposit"]["joseph_amt"])))
-                c3.metric("Ethan", fmt_money(parse_money(pair["deposit"]["ethan_amt"])))
-                c4.metric("Josh", fmt_money(parse_money(pair["deposit"]["josh_amt"])))
-                st.subheader("Balance split")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("VSP (10%)", fmt_money(parse_money(pair["balance"]["vsp_amt"])))
-                c2.metric("Joseph", fmt_money(parse_money(pair["balance"]["joseph_amt"])))
-                c3.metric("Ethan", fmt_money(parse_money(pair["balance"]["ethan_amt"])))
-                c4.metric("Josh", fmt_money(parse_money(pair["balance"]["josh_amt"])))
-            except (RuntimeError, ValueError) as e:
-                st.error(str(e))
-
-# ----------------------------------------------------------------- EVENT LOG
-elif page == "Event Log":
-    st.title("Event Log")
-    st.caption("Every payment entered through this app or directly in the spreadsheet. "
-               "Mark an event Paid once the money actually arrives, so it flows into Monthly Summary.")
-    entries = sheets.read_event_log()
-    if not entries:
-        st.info("No events logged yet.")
-    for e in entries:
-        label = f"{e['event']} — {e['date']} — {fmt_money(parse_money(e['gross']))} ({e['status']})"
-        with st.expander(label):
-            st.write(f"**Split:** {e['split_type']} · **Lead:** {e['lead']}")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("VSP", fmt_money(parse_money(e["vsp_amt"])))
-            c2.metric("Joseph", fmt_money(parse_money(e["joseph_amt"])))
-            c3.metric("Ethan", fmt_money(parse_money(e["ethan_amt"])))
-            c4.metric("Josh", fmt_money(parse_money(e["josh_amt"])))
-            if e["notes"]:
-                st.write(f"**Notes:** {e['notes']}")
-            if e["status"] == "Pending":
-                if st.button("Mark Paid", key=f"paid_{e['row']}"):
-                    sheets.mark_event_log_paid(e["row"])
-                    st.success("Marked paid.")
-                    st.rerun()
+    with st.popover("➕ Log a payout", use_container_width=False):
+        st.subheader("New payout")
+        c1, c2 = st.columns(2)
+        pdate = c1.date_input("Date", value=dt.date.today())
+        person = c2.selectbox("Person", sheets.PEOPLE)
+        amount = st.number_input("Amount ($)", min_value=0.0, step=50.0)
+        note = st.text_input("For / notes", placeholder="e.g. August dividend")
+        if st.button("Log payout", type="primary"):
+            if amount <= 0:
+                st.error("Enter an amount greater than $0.")
             else:
-                st.write(f"Paid {e['date_paid']}")
+                sheets.add_payout(pdate, person, amount, note)
+                st.success(f"Logged {money(amount)} to {person}.")
+                st.rerun()
 
-# ------------------------------------------------------- ACCOUNTS RECEIVABLE
-elif page == "Accounts Receivable":
-    st.title("Accounts Receivable")
-    st.caption("The already-booked events, split 50/25/25 the old way. Record what you've "
-               "received as it arrives. A partial amount (like a deposit) splits the line: "
-               "the received part gets counted in its month, and a '(Remaining)' line stays "
-               "pending for the rest.")
-    ar = sheets.read_accounts_receivable()
-    for row in ar:
-        label = f"{row['event']} — {row['location']} — {fmt_money(parse_money(row['gross']))} ({row['status']})"
-        with st.expander(label):
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Joseph", fmt_money(parse_money(row["joseph_amt"])))
-            c2.metric("Ethan", fmt_money(parse_money(row["ethan_amt"])))
-            c3.metric("Josh", fmt_money(parse_money(row["josh_amt"])))
-            if row["notes"]:
-                st.write(f"**Notes:** {row['notes']}")
-            if row["status"] == "Pending":
-                owed = parse_money(row["gross"])
-                c1, c2 = st.columns(2)
-                amt = c1.number_input("Amount received ($)", min_value=0.0, max_value=owed,
-                                      value=owed, step=25.0, key=f"amt_{row['row']}",
-                                      help="Defaults to the full amount owed on this line. "
-                                           "Enter less if you only received a deposit.")
-                recv_date = c2.date_input("Date received", value=dt.date.today(),
-                                          key=f"date_{row['row']}")
-                if st.button("Record payment", key=f"recv_{row['row']}"):
-                    try:
-                        result = sheets.record_ar_payment(row["row"], amt, recv_date.isoformat())
-                        if result["partial"]:
-                            st.success(f"Recorded {fmt_money(result['received'])} received. "
-                                       f"{fmt_money(result['remaining'])} still pending on a new "
-                                       "'(Remaining)' line.")
-                        else:
-                            st.success(f"Recorded {fmt_money(result['received'])} — paid in full.")
-                        st.rerun()
-                    except ValueError as e:
-                        st.error(str(e))
-            else:
-                st.write(f"Received {row['date_received']}")
+    st.subheader("Payout history")
+    payouts = sheets.read_payouts()
+    payouts.sort(key=lambda p: p["date"], reverse=True)
+    if not payouts:
+        st.info("No payouts logged yet.")
+    else:
+        st.table([{"Date": p["date"], "Person": p["person"],
+                   "Amount": money(p["amount"]), "For": p["note"]} for p in payouts])
+
+# ================================================================ HISTORY
+elif page == "History":
+    st.title("History")
+    st.caption("Every month's money in and money out. Fills in automatically as payments and payouts happen.")
+
+    rows = sheets.read_history()
+    cutoff = dt.date.today().strftime("%Y-%m")
+    rows = [r for r in rows if r["month"] <= cutoff]
+
+    active = [r for r in rows if any(parse_money(r[k]) for k in ("money_in", "total_paid"))]
+    if not active:
+        st.info("No activity yet. Months will appear here as money moves.")
+    else:
+        lifetime_in = sum(parse_money(r["money_in"]) for r in rows)
+        lifetime_out = sum(parse_money(r["total_paid"]) for r in rows)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Lifetime money in", fmt_money(lifetime_in))
+        c2.metric("Lifetime paid out", fmt_money(lifetime_out))
+        c3.metric("Months tracked", str(len(active)))
+
+        labels = [r["month"] for r in active]
+        fig = go.Figure()
+        fig.add_bar(name="Money in", x=labels, y=[parse_money(r["money_in"]) for r in active],
+                    marker_color="#1baf7a")
+        fig.add_bar(name="Paid out", x=labels, y=[parse_money(r["total_paid"]) for r in active],
+                    marker_color="#e34948")
+        fig.update_layout(barmode="group", plot_bgcolor=SURFACE, paper_bgcolor=SURFACE,
+                          font=dict(color=INK), legend_title_text="",
+                          xaxis=dict(showgrid=False, linecolor=MUTED),
+                          yaxis=dict(showgrid=True, gridcolor=GRID, tickprefix="$", zeroline=False),
+                          margin=dict(t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("Month by month")
+        st.table([{"Month": r["month"], "In": money(r["money_in"]),
+                   "Joseph": money(r["joseph"]), "Ethan": money(r["ethan"]),
+                   "Josh": money(r["josh"]), "VSP": money(r["vsp"]),
+                   "Paid out": money(r["total_paid"])} for r in reversed(active)])
