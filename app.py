@@ -158,28 +158,19 @@ elif page == "Events":
                 if e["notes"]:
                     st.write(e["notes"])
                 st.markdown("**Update status**")
+                st.caption("Status drives the money: **Deposit In** counts 50% of the total as received, "
+                           "**Paid in Full** counts the whole amount. Balance and what's owed update automatically.")
                 new_status = st.selectbox("Status", sheets.STATUSES,
                                           index=sheets.STATUSES.index(e["status"]) if e["status"] in sheets.STATUSES else 0,
                                           key=f"st_{e['row']}", label_visibility="collapsed")
-                if st.button("Save status", key=f"savest_{e['row']}"):
-                    sheets.update_event_status(e["row"], new_status)
+                rdate = None
+                if new_status in ("Deposit In", "Paid in Full"):
+                    rdate = st.date_input("Date the money came in (for the monthly history)",
+                                          value=dt.date.today(), key=f"rd_{e['row']}")
+                if st.button("Save", key=f"savest_{e['row']}"):
+                    sheets.update_event_status(e["row"], new_status, received_date=rdate)
+                    st.success("Saved.")
                     st.rerun()
-
-                if parse_money(e["total"]):
-                    st.markdown("**Record a payment received**")
-                    st.caption("Enter the total received so far (deposit, then update to the full amount later).")
-                    cc1, cc2 = st.columns(2)
-                    amt = cc1.number_input("Received so far ($)", min_value=0.0,
-                                           max_value=float(parse_money(e["total"])),
-                                           value=float(parse_money(e["received"])), step=50.0,
-                                           key=f"rc_{e['row']}")
-                    rdate = cc2.date_input("Date received", value=dt.date.today(), key=f"rd_{e['row']}")
-                    if st.button("Save payment", key=f"savercv_{e['row']}"):
-                        auto = ("Paid in Full" if amt >= parse_money(e["total"]) - 0.005
-                                else "Deposit In" if amt > 0 else e["status"])
-                        sheets.update_event_received(e["row"], amt, rdate, status=auto)
-                        st.success("Saved.")
-                        st.rerun()
 
 # ================================================================ PAYOUTS
 elif page == "Payouts":

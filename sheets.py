@@ -105,37 +105,33 @@ def _next_event_row():
 
 
 def add_event(name, date, location, status, total, vsp_pct, joseph_pct, ethan_pct, josh_pct,
-              received=0, received_date=None, notes=""):
+              received_date=None, notes=""):
+    """Received $ is NOT written here — it's a sheet formula driven by Status
+    (Deposit In = 50%, Paid in Full = 100%). We only write the input columns."""
     row = _next_event_row()
     if row is None:
         raise RuntimeError("The Events tab is full. Ask Claude to add more rows.")
     ws = _ws("Events")
     date_s = date.isoformat() if hasattr(date, "isoformat") else (date or "")
     rd_s = received_date.isoformat() if hasattr(received_date, "isoformat") else (received_date or "")
-    # Only the input columns; the sheet's formulas fill J,K,L,M,N,P and the helpers.
     ws.update(range_name=f"A{row}:I{row}",
               values=[[name, date_s, location, status,
                        total if total not in ("", None) else "",
                        vsp_pct, joseph_pct, ethan_pct, josh_pct]],
               value_input_option="USER_ENTERED")
-    ws.update(range_name=f"O{row}", values=[[received or ""]], value_input_option="USER_ENTERED")
     ws.update(range_name=f"Q{row}:R{row}", values=[[rd_s, notes]], value_input_option="USER_ENTERED")
     st.cache_data.clear()
     return row
 
 
-def update_event_status(row, status):
-    _ws("Events").update(range_name=f"D{row}", values=[[status]], value_input_option="USER_ENTERED")
-    st.cache_data.clear()
-
-
-def update_event_received(row, received_amount, received_date=None, status=None):
+def update_event_status(row, status, received_date=None):
+    """Sets status (which drives Received $ via formula). If the status means money
+    came in (Deposit In / Paid in Full), also records the date for the monthly history."""
     ws = _ws("Events")
-    rd = received_date.isoformat() if hasattr(received_date, "isoformat") else (received_date or "")
-    ws.update(range_name=f"O{row}", values=[[received_amount]], value_input_option="USER_ENTERED")
-    ws.update(range_name=f"Q{row}", values=[[rd]], value_input_option="USER_ENTERED")
-    if status:
-        ws.update(range_name=f"D{row}", values=[[status]], value_input_option="USER_ENTERED")
+    ws.update(range_name=f"D{row}", values=[[status]], value_input_option="USER_ENTERED")
+    if received_date is not None and status in ("Deposit In", "Paid in Full"):
+        rd = received_date.isoformat() if hasattr(received_date, "isoformat") else received_date
+        ws.update(range_name=f"Q{row}", values=[[rd]], value_input_option="USER_ENTERED")
     st.cache_data.clear()
 
 

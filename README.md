@@ -10,9 +10,10 @@ same data, always in sync. Edit in whichever you prefer.
   person is still owed (what to pay next), the pipeline still to collect, and the
   next events.
 - **Events** — one row per booking. Name, date, location, status, the total fee,
-  and each person's percentage and dollar share. Record payments as they come in
-  (a deposit, then the full amount later — just update "received so far"). Status:
-  Inquiry → Tentative → Confirmed → Deposit In → Paid in Full.
+  and each person's percentage and dollar share. **The status drives the money:**
+  set an event to **Deposit In** and it counts 50% of the total as received; set it
+  to **Paid in Full** and it counts the whole amount. Balance and "still owed"
+  update automatically. Status: Inquiry → Tentative → Confirmed → Deposit In → Paid in Full.
 - **Payouts** — money paid out to Joseph, Ethan, Josh, or VSP. Logging a payout
   reduces what that person is "still owed" on the Dashboard.
 - **History** — every month's money in and money out, automatic.
