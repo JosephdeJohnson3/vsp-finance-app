@@ -57,6 +57,20 @@ def money(x):
     return fmt_money(parse_money(x))
 
 
+def _to_int(x):
+    try:
+        return int(round(float(str(x).strip() or 0)))
+    except ValueError:
+        return 0
+
+
+def _to_date(s):
+    try:
+        return dt.date.fromisoformat(str(s).strip())
+    except ValueError:
+        return None
+
+
 # ============================================================== DASHBOARD
 if page == "Dashboard":
     st.title("Dashboard")
@@ -167,9 +181,47 @@ elif page == "Events":
                 if new_status in ("Deposit In", "Paid in Full"):
                     rdate = st.date_input("Date the money came in (for the monthly history)",
                                           value=dt.date.today(), key=f"rd_{e['row']}")
-                if st.button("Save", key=f"savest_{e['row']}"):
+                if st.button("Save status", key=f"savest_{e['row']}"):
                     sheets.update_event_status(e["row"], new_status, received_date=rdate)
                     st.success("Saved.")
+                    st.rerun()
+
+                st.divider()
+                with st.form(f"edit_{e['row']}"):
+                    st.markdown("**Edit details**")
+                    en = st.text_input("Event name", value=e["event"], key=f"en_{e['row']}")
+                    c1, c2 = st.columns(2)
+                    ed = c1.date_input("Date", value=_to_date(e["date"]), key=f"ed_{e['row']}")
+                    eloc = c2.text_input("Location", value=e["location"], key=f"eloc_{e['row']}")
+                    etot = st.number_input("Total fee ($)", min_value=0.0, step=50.0,
+                                           value=float(parse_money(e["total"])), key=f"etot_{e['row']}")
+                    st.caption("Percentages (VSP + the three of you must add to 100).")
+                    c1, c2, c3, c4 = st.columns(4)
+                    evsp = c1.number_input("VSP %", 0, 100, _to_int(e["vsp_pct"]), step=5, key=f"evsp_{e['row']}")
+                    ejo = c2.number_input("Joseph %", 0, 100, _to_int(e["joseph_pct"]), step=5, key=f"ejo_{e['row']}")
+                    eet = c3.number_input("Ethan %", 0, 100, _to_int(e["ethan_pct"]), step=5, key=f"eet_{e['row']}")
+                    ejosh = c4.number_input("Josh %", 0, 100, _to_int(e["josh_pct"]), step=5, key=f"ejosh_{e['row']}")
+                    enotes = st.text_area("Notes", value=e["notes"], key=f"enotes_{e['row']}")
+                    if st.form_submit_button("Save details"):
+                        psum = evsp + ejo + eet + ejosh
+                        if not en.strip():
+                            st.error("Event name is required.")
+                        elif etot > 0 and psum != 100:
+                            st.error(f"Percentages add up to {psum}%, not 100%.")
+                        else:
+                            sheets.update_event_details(
+                                e["row"], en, ed, eloc, e["status"],
+                                etot if etot > 0 else "", evsp, ejo, eet, ejosh, notes=enotes)
+                            st.success("Saved.")
+                            st.rerun()
+
+                st.divider()
+                st.markdown("**Delete this event**")
+                confirm = st.checkbox("Yes, remove this event from the list",
+                                      key=f"delchk_{e['row']}")
+                if st.button("🗑️ Delete event", key=f"delbtn_{e['row']}", disabled=not confirm):
+                    sheets.delete_event(e["row"])
+                    st.success("Deleted.")
                     st.rerun()
 
 # ================================================================ PAYOUTS

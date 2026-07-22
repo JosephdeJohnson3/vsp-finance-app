@@ -124,6 +124,28 @@ def add_event(name, date, location, status, total, vsp_pct, joseph_pct, ethan_pc
     return row
 
 
+def update_event_details(row, name, date, location, status, total,
+                         vsp_pct, joseph_pct, ethan_pct, josh_pct,
+                         received_date=None, notes=""):
+    """Rewrites all of an event's input cells. Received $ stays a formula of status."""
+    ws = _ws("Events")
+    date_s = date.isoformat() if hasattr(date, "isoformat") else (date or "")
+    rd_s = received_date.isoformat() if hasattr(received_date, "isoformat") else (received_date or "")
+    ws.update(range_name=f"A{row}:I{row}",
+              values=[[name, date_s, location, status,
+                       total if total not in ("", None) else "",
+                       vsp_pct, joseph_pct, ethan_pct, josh_pct]],
+              value_input_option="USER_ENTERED")
+    ws.update(range_name=f"Q{row}:R{row}", values=[[rd_s, notes]], value_input_option="USER_ENTERED")
+    st.cache_data.clear()
+
+
+def delete_event(row):
+    """Clears the event's input cells (keeps the row's formulas so it's reusable)."""
+    _ws("Events").batch_clear([f"A{row}:I{row}", f"Q{row}:R{row}"])
+    st.cache_data.clear()
+
+
 def update_event_status(row, status, received_date=None):
     """Sets status (which drives Received $ via formula). If the status means money
     came in (Deposit In / Paid in Full), also records the date for the monthly history."""
