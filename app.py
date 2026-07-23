@@ -1,10 +1,11 @@
 """VSP Finance — a simple money tracker for The Virginia Strings Project.
 
-Four pages, backed by one Google Sheet (the single source of truth):
+Backed by one Google Sheet (the single source of truth):
   Dashboard — where the money stands
   Events    — every booking, its money, each person's share, and status
   Payouts   — money paid out to the group
   History   — every past month
+  Leads     — potential clients found on Reddit (separate from the finance tabs)
 """
 import datetime as dt
 
@@ -12,12 +13,15 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import sheets
+import leads
 from utils import fmt_money, parse_money
 
 COLORS = {"Joseph": "#2a78d6", "Ethan": "#1baf7a", "Josh": "#eda100", "VSP": "#008300"}
 INK, MUTED, GRID, SURFACE = "#0b0b0b", "#898781", "#e1e0d9", "#fcfcfb"
 STATUS_COLOR = {"Inquiry": "gray", "Tentative": "orange", "Confirmed": "blue",
                 "Deposit In": "violet", "Paid in Full": "green"}
+LEAD_TIER_COLOR = {"Hot": "red", "Warm": "orange", "Cold": "blue"}
+LEAD_TIER_EMOJI = {"Hot": "🔥", "Warm": "🌤️", "Cold": "❄️"}
 
 st.set_page_config(page_title="VSP Finance", page_icon="🎻", layout="wide")
 
@@ -50,7 +54,7 @@ except Exception as e:
 st.sidebar.title("🎻 VSP Finance")
 st.sidebar.markdown(f"[📊 Open the spreadsheet]({sheets.spreadsheet_url()})")
 st.sidebar.divider()
-page = st.sidebar.radio("Go to", ["Dashboard", "Events", "Payouts", "History"])
+page = st.sidebar.radio("Go to", ["Dashboard", "Events", "Payouts", "History", "Leads"])
 
 
 def money(x):
@@ -298,3 +302,69 @@ elif page == "History":
                    "Joseph": money(r["joseph"]), "Ethan": money(r["ethan"]),
                    "Josh": money(r["josh"]), "VSP": money(r["vsp"]),
                    "Paid out": money(r["total_paid"])} for r in reversed(active)])
+
+# ================================================================== LEADS
+elif page == "Leads":
+    st.title("Leads")
+    st.caption("Potential clients found on Reddit, ranked by how well they fit VSP. "
+               "This is completely separate from the finance tabs. Reach out yourself "
+               "through the link (follow each subreddit's rules).")
+
+    if not leads.reddit_configured():
+        st.warning("Reddit isn't connected yet, so new leads can't be pulled. "
+                   "Add your [reddit] credentials in the app secrets — see the README "
+                   "(reddit.com/prefs/apps → create a 'script' app, ~3 minutes, free).")
+    else:
+        c1, c2 = st.columns([1, 3])
+        if c1.button("🔎 Find new leads", type="primary"):
+            with st.spinner("Searching Reddit…"):
+                try:
+                    n = leads.find_new_leads()
+                    st.success(f"Added {n} new lead{'s' if n != 1 else ''}." if n
+                               else "No new leads this time — try again later.")
+                except Exception as e:
+                    st.error(str(e))
+
+    all_leads = leads.read_leads()
+    if not all_leads:
+        st.info("No leads yet. Click **🔎 Find new leads** to pull some in.")
+    else:
+        tier_counts = {t: sum(1 for x in all_leads if x["tier"] == t) for t in leads.LEAD_TIERS}
+        c1, c2, c3 = st.columns(3)
+        c1.metric("🔥 Hot", tier_counts.get("Hot", 0))
+        c2.metric("🌤️ Warm", tier_counts.get("Warm", 0))
+        c3.metric("❄️ Cold", tier_counts.get("Cold", 0))
+
+        f1, f2 = st.columns(2)
+        tier_filter = f1.multiselect("Show tiers", leads.LEAD_TIERS, default=["Hot", "Warm"])
+        hide_dead = f2.checkbox("Hide Dead / Booked", value=True)
+
+        shown = [x for x in all_leads
+                 if (not tier_filter or x["tier"] in tier_filter)
+                 and not (hide_dead and x["status"] in ("Dead", "Booked"))]
+        order = {"Hot": 0, "Warm": 1, "Cold": 2}
+        shown.sort(key=lambda x: (order.get(x["tier"], 3), x["found"]), reverse=False)
+
+        st.caption(f"{len(shown)} shown")
+        for x in shown:
+            with st.container(border=True):
+                top1, top2 = st.columns([4, 1])
+                emoji = LEAD_TIER_EMOJI.get(x["tier"], "")
+                top1.markdown(f"**{x['title']}**")
+                top2.badge(f"{emoji} {x['tier']}", color=LEAD_TIER_COLOR.get(x["tier"], "gray"))
+                st.write(f"{x['why']}  ·  r/{x['subreddit']}  ·  found {x['found']}")
+                if x["link"]:
+                    st.markdown(f"[Open the post ↗]({x['link']})")
+                with st.expander(f"Status: {x['status'] or 'New'} — update"):
+                    new_status = st.selectbox("Status", leads.LEAD_STATUSES,
+                                              index=leads.LEAD_STATUSES.index(x["status"]) if x["status"] in leads.LEAD_STATUSES else 0,
+                                              key=f"ls_{x['row']}")
+                    who = st.selectbox("By", ["", "Joseph", "Ethan", "Josh"],
+                                       index=(["", "Joseph", "Ethan", "Josh"].index(x["contacted_by"])
+                                              if x["contacted_by"] in ("", "Joseph", "Ethan", "Josh") else 0),
+                                       key=f"lby_{x['row']}")
+                    lnotes = st.text_area("Notes", value=x["notes"], key=f"ln_{x['row']}")
+                    if st.button("Save", key=f"lsave_{x['row']}"):
+                        leads.update_lead(x["row"], new_status, lnotes, who)
+                        st.success("Saved.")
+                        st.rerun()

@@ -33,6 +33,28 @@ Everything recalculates the moment you change anything, in the app or the sheet.
 cells are formulas — don't overwrite them). Want a downloadable Excel copy? In the
 sheet: **File → Download → Microsoft Excel (.xlsx)**.
 
+## Leads page (Reddit lead finder — optional)
+
+A separate **Leads** page finds potential clients on Reddit (public posts, read-only)
+and tiers them **Hot / Warm / Cold** by brand fit. It's completely disconnected from
+the finance tabs — it writes to its own "Leads" tab in the sheet. Click **🔎 Find new
+leads** to pull them in; open each post's link to reach out yourself (follow each
+subreddit's rules — the tool never posts anything).
+
+**One-time Reddit setup (~3 min, free):**
+1. Go to [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) → **create app** →
+   choose type **script**. Name it anything; redirect URL can be `http://localhost`.
+2. Note the **client id** (the string under the app's name) and the **secret**.
+3. Add to the app's secrets (Streamlit Cloud → Settings → Secrets, and your local
+   `.streamlit/secrets.toml`):
+   ```toml
+   [reddit]
+   client_id = "..."
+   client_secret = "..."
+   user_agent = "vsp-leads by u/your_reddit_username"
+   ```
+Until these are set, the Leads page still shows existing leads but can't pull new ones.
+
 ## Deployment
 
 Runs on Streamlit Community Cloud, deploying from this GitHub repo. Secrets (the
